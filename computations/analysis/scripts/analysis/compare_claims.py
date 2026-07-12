@@ -190,7 +190,7 @@ async def compare_pair(client: AsyncOpenAI, pair: dict, sem: asyncio.Semaphore) 
                     ],
                     response_format={"type": "json_object"},
                     temperature=0.0,
-                    max_tokens=800,
+                    max_tokens=1500,
                 )
                 raw    = response.choices[0].message.content
                 parsed = json.loads(raw)
