@@ -11,7 +11,7 @@ this script:
        - confidence : Unchanged | Tempered  | Amplified  (N/A for Removed/Added)
   4. Returns a matching_confidence (0.0–1.0) for each alignment.
 
-Model: claude-sonnet-4-6 (best available reasoning model at time of run).
+Model: gpt-4o
 Resumes from existing output — safe to interrupt and restart.
 
 Reads from:
@@ -30,7 +30,7 @@ Usage:
     # Pilot mode (first 50 pairs only — run this before the full run):
     python3 computations/analysis/scripts/analysis/compare_claims.py --pilot
 
-Estimated cost:  ~$25–40 USD for 51,946 pairs using claude-sonnet-4-6
+Estimated cost:  ~$30–50 USD for 51,946 pairs using gpt-4o
 Estimated time:  3–5 hours (async, 20 concurrent requests)
 """
 
@@ -57,7 +57,7 @@ OUT_FLAT     = OUT_DIR / "claim_changes_flat.csv"
 OUT_REPORT   = PROJECT_ROOT / "computations" / "analysis" / "outputs" / "comparison_report.txt"
 
 # ── Configuration ──────────────────────────────────────────────────────────────
-MODEL        = "claude-sonnet-4-6"
+MODEL        = "gpt-4o"
 CONCURRENCY  = 20          # async semaphore limit
 MAX_RETRIES  = 3
 RETRY_WAIT   = 5           # seconds, multiplied by attempt number
@@ -190,7 +190,6 @@ async def compare_pair(client: AsyncOpenAI, pair: dict, sem: asyncio.Semaphore) 
                     response_format={"type": "json_object"},
                     temperature=0.0,
                     max_tokens=2000,
-                    extra_body={"thinking": {"type": "enabled", "budget_tokens": 512}},
                 )
                 raw    = response.choices[0].message.content
                 parsed = json.loads(raw)
