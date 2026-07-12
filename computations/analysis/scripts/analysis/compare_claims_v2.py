@@ -48,7 +48,7 @@ from tqdm import tqdm
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 SCRIPT_DIR   = Path(__file__).resolve().parent
-PROJECT_ROOT = SCRIPT_DIR.parents[3]          # .../claim-evolution-aiml
+PROJECT_ROOT = SCRIPT_DIR.parents[4]          # .../claim-evolution-aiml
 
 CLAIMS_FILE  = PROJECT_ROOT / "computations" / "data" / "data_sources" / "claims" / "claims_extracted.jsonl"
 KEY_FILE     = PROJECT_ROOT / "config" / "openai_key.txt"
