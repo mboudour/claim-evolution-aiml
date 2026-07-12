@@ -221,7 +221,7 @@ async def compare_pair(client: AsyncOpenAI, pair: dict, sem: asyncio.Semaphore) 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 
-async def main(pilot: bool = False):
+async def main(pilot: bool = False, force: bool = False):
     print("=== Claim Comparison: Multi-Dimensional Annotation ===\n")
 
     # Resolve API key
@@ -249,15 +249,26 @@ async def main(pilot: bool = False):
 
     if pilot:
         pairs = pairs[:50]
-        print(f"  PILOT MODE: processing first 50 pairs only\n")
+        print(f"  PILOT MODE: processing first 50 pairs only")
+        if force:
+            print(f"  FORCE MODE: re-processing even if already done\n")
+            todo = [p for p in pairs if not p.get("error")]
+        else:
+            done_ids = load_done_ids()
+            if done_ids:
+                print(f"  Already processed: {len(done_ids):,} — resuming...")
+            todo = [p for p in pairs if p.get("pair_id", "") not in done_ids and not p.get("error")]
+            print(f"  To process: {len(todo):,}\n")
+            if not todo:
+                print("All pilot pairs already processed. Use --force to re-run them.")
+                return
     else:
         print()
+        done_ids = load_done_ids()
+        if done_ids:
+            print(f"  Already processed: {len(done_ids):,} — resuming...")
+        todo = [p for p in pairs if p.get("pair_id", "") not in done_ids and not p.get("error")]
 
-    # Skip already-processed
-    done_ids = load_done_ids()
-    if done_ids:
-        print(f"  Already processed: {len(done_ids):,} — resuming...")
-    todo = [p for p in pairs if p.get("pair_id", "") not in done_ids and not p.get("error")]
     print(f"  To process: {len(todo):,}\n")
 
     if not todo:
@@ -333,6 +344,10 @@ async def main(pilot: bool = False):
     print(f"  Saved {len(flat_df):,} claim alignments → {OUT_FLAT.name}")
 
     # ── Summary report ─────────────────────────────────────────────────────────
+    if flat_df.empty or "semantic" not in flat_df.columns:
+        print("No alignments to report.")
+        return
+
     total = len(flat_df)
     sem_counts  = Counter(flat_df["semantic"].tolist())
     sco_counts  = Counter(flat_df.loc[~flat_df["scope"].isin(["N/A", ""]), "scope"].tolist())
@@ -386,5 +401,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--pilot", action="store_true",
                         help="Process only the first 50 pairs (for testing)")
+    parser.add_argument("--force", action="store_true",
+                        help="Re-process pairs even if already in output (use with --pilot)")
     args = parser.parse_args()
-    asyncio.run(main(pilot=args.pilot))
+    asyncio.run(main(pilot=args.pilot, force=args.force))
