@@ -58,7 +58,7 @@ OUT_REPORT   = PROJECT_ROOT / "computations" / "analysis" / "outputs" / "compari
 
 # ── Configuration ──────────────────────────────────────────────────────────────
 MODEL        = "gpt-4o"
-CONCURRENCY  = 10          # async semaphore limit
+CONCURRENCY  = 20          # async semaphore limit
 MAX_RETRIES  = 8           # total attempts per pair
 RETRY_WAIT   = 5           # seconds for generic errors (multiplied by attempt)
 RETRY_429    = 62          # seconds to wait on rate-limit (one full TPM window)
@@ -190,7 +190,7 @@ async def compare_pair(client: AsyncOpenAI, pair: dict, sem: asyncio.Semaphore) 
                     ],
                     response_format={"type": "json_object"},
                     temperature=0.0,
-                    max_tokens=2000,
+                    max_tokens=800,
                 )
                 raw    = response.choices[0].message.content
                 parsed = json.loads(raw)
