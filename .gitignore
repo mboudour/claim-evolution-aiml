@@ -216,3 +216,21 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Data files — not tracked in this repository
+*.csv
+*.jsonl
+*.json
+*.xlsx
+*.xls
+*.pdf
+*.pkl
+*.parquet
+*.h5
+config/
+# Keep .gitkeep files
+!**/.gitkeep
+# Keep manuscript tex files
+!manuscript/tex/*.tex
+!manuscript/tex/*.bib
+!manuscript/tex/*.pdf
