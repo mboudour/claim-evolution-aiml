@@ -1,118 +1,153 @@
 """
-compare_claims.py  —  Step 9 (Claim Comparison and Change Classification)
+compare_claims.py  —  Claim Comparison with Multi-Dimensional Annotation Scheme
 
-For each of the 51,946 preprint–publication pairs with extracted claims,
-compares the preprint claims against the publication claims and classifies
-each change using an LLM judge.
+For each of the ~51,946 preprint–publication pairs with extracted claims,
+this script:
+  1. Presents the full list of preprint claims and publication claims to the LLM.
+  2. Asks the LLM to semantically align them (no fuzzy string matching).
+  3. For each aligned pair, produces three independent annotations:
+       - semantic   : Unchanged | Clarified | Revised | Removed | Added
+       - scope      : Unchanged | Narrowed  | Broadened  (N/A for Removed/Added)
+       - confidence : Unchanged | Tempered  | Amplified  (N/A for Removed/Added)
+  4. Returns a matching_confidence (0.0–1.0) for each alignment.
 
-Change categories:
-  - strengthened : hedged → more assertive (e.g., "suggests" → "demonstrates")
-  - weakened     : assertive → more hedged (e.g., "proves" → "indicates")
-  - unchanged    : same claim, same certainty level
-  - added        : new claim present in publication but not in preprint
-  - removed      : claim present in preprint but dropped from publication
-
-Also computes a pair-level summary:
-  - dominant_change: the most common change type for the pair
-  - n_strengthened, n_weakened, n_unchanged, n_added, n_removed
+Model: claude-sonnet-4-6 (best available reasoning model at time of run).
+Resumes from existing output — safe to interrupt and restart.
 
 Reads from:
-    data/claims/claims_extracted.jsonl
+    computations/data/data_sources/claims/claims_extracted.jsonl
 
 Writes to:
-    data/claims/claim_changes.jsonl      ← one record per pair with full change details
-    data/claims/claim_changes_flat.csv   ← flat CSV with one row per claim comparison
-    data/claims/comparison_report.txt    ← summary statistics
+    computations/data/data_sources/claims/claim_changes.jsonl
+    computations/data/data_sources/claims/claim_changes_flat.csv
+    computations/analysis/outputs/comparison_report.txt
 
 Usage:
-    cd SSRN_bioRxiv_medRxiv_data_collection_via_Dimensions
-    python3 code/analysis/compare_claims.py
+    cd <project_root>
+    export OPENAI_API_KEY="sk-..."          # or set in config/openai_key.txt
+    python3 computations/analysis/scripts/analysis/compare_claims.py
 
-Estimated cost:  ~$8 USD for 51,946 pairs using gpt-4o-mini
-Estimated time:  2–3 hours
+    # Pilot mode (first 50 pairs only — run this before the full run):
+    python3 computations/analysis/scripts/analysis/compare_claims.py --pilot
+
+Estimated cost:  ~$25–40 USD for 51,946 pairs using claude-sonnet-4-6
+Estimated time:  3–5 hours (async, 20 concurrent requests)
 """
 
+import argparse
 import asyncio
 import json
+import os
 import time
-import pandas as pd
-from pathlib import Path
-from tqdm import tqdm
-from openai import AsyncOpenAI
 from collections import Counter
+from pathlib import Path
+
+import pandas as pd
+from openai import AsyncOpenAI
+from tqdm import tqdm
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 SCRIPT_DIR   = Path(__file__).resolve().parent
-PROJECT_ROOT = SCRIPT_DIR.parents[1]
+PROJECT_ROOT = SCRIPT_DIR.parents[4]          # .../claim-evolution-aiml
 
-CLAIMS_FILE  = PROJECT_ROOT / "data" / "claims" / "claims_extracted.jsonl"
-KEY_FILE     = PROJECT_ROOT / "config" / "openai_key.txt"
-OUT_DIR      = PROJECT_ROOT / "data" / "claims"
+CLAIMS_FILE  = PROJECT_ROOT / "computations" / "data" / "data_sources" / "claims" / "claims_extracted.jsonl"
+KEY_FILE     = PROJECT_ROOT / "computations" / "data" / "config" / "openai_key.txt"
+OUT_DIR      = PROJECT_ROOT / "computations" / "data" / "data_sources" / "claims"
 OUT_CHANGES  = OUT_DIR / "claim_changes.jsonl"
 OUT_FLAT     = OUT_DIR / "claim_changes_flat.csv"
-OUT_REPORT   = OUT_DIR / "comparison_report.txt"
+OUT_REPORT   = PROJECT_ROOT / "computations" / "analysis" / "outputs" / "comparison_report.txt"
 
 # ── Configuration ──────────────────────────────────────────────────────────────
-MODEL       = "gpt-4o-mini"
-BATCH_SIZE  = 50
-MAX_RETRIES = 3
-RETRY_WAIT  = 5
+MODEL        = "claude-sonnet-4-6"
+CONCURRENCY  = 20          # async semaphore limit
+MAX_RETRIES  = 3
+RETRY_WAIT   = 5           # seconds, multiplied by attempt number
 
-# ── Prompt ─────────────────────────────────────────────────────────────────────
-SYSTEM_PROMPT = """You are a scientific claim comparator. You will be given a list of claims from a preprint abstract and a list of claims from its published journal version.
+# ── System prompt ──────────────────────────────────────────────────────────────
+SYSTEM_PROMPT = """You are an expert annotator of scientific claims. You will be given two lists of claims: one from a preprint abstract and one from the corresponding published version of the same paper.
 
-Your task is to compare the two sets of claims and classify each change.
+Your task has two parts:
 
-For each preprint claim, find the most semantically similar publication claim and classify the change as:
-- "strengthened": the publication claim is more assertive, confident, or certain than the preprint claim
-- "weakened": the publication claim is more hedged, cautious, or uncertain than the preprint claim  
-- "unchanged": the claim is essentially the same in both versions
-- "removed": the preprint claim has no corresponding claim in the publication
+PART 1 — ALIGNMENT
+Semantically align each preprint claim to the most similar publication claim. Base alignment on meaning, not wording. A preprint claim with no meaningful counterpart in the publication is "Removed". A publication claim with no meaningful counterpart in the preprint is "Added".
 
-For each publication claim with no corresponding preprint claim, classify it as:
-- "added": new claim present only in the publication
+PART 2 — ANNOTATION
+For each aligned pair (excluding Removed and Added), assign three independent labels:
+
+1. semantic — What happened to the claim overall?
+   - Unchanged  : the claim conveys the same meaning in both versions
+   - Clarified  : the claim is reworded for precision or clarity without changing its scope or confidence
+   - Revised    : the claim's substance, framing, or emphasis changed materially
+
+2. scope — Did the domain of applicability change?
+   - Unchanged  : the claim applies to the same set of conditions, datasets, or populations
+   - Narrowed   : the published claim applies to a more restricted set (e.g., "across all tasks" → "on benchmark X")
+   - Broadened  : the published claim applies to a wider set
+
+3. confidence — Did the expressed certainty change?
+   - Unchanged  : the level of hedging or assertion is the same
+   - Tempered   : the published claim is more hedged, cautious, or uncertain (e.g., "proves" → "suggests")
+   - Amplified  : the published claim is more assertive or certain
+
+Also assign:
+   - matching_confidence (float 0.0–1.0): your confidence that this is the correct alignment. Use 1.0 for obvious matches, lower values when the alignment is uncertain.
+
+For Removed claims: set scope and confidence to "N/A".
+For Added claims: set scope and confidence to "N/A".
 
 Return a JSON object with this exact structure:
 {
-  "comparisons": [
+  "alignments": [
     {
-      "preprint_claim": "the original preprint claim text, or null if added",
-      "publication_claim": "the publication claim text, or null if removed",
-      "change_type": "strengthened|weakened|unchanged|removed|added",
-      "reasoning": "one sentence explaining why this change type was assigned"
+      "preprint_claim": "<text of preprint claim, or null if Added>",
+      "publication_claim": "<text of publication claim, or null if Removed>",
+      "semantic": "Unchanged|Clarified|Revised|Removed|Added",
+      "scope": "Unchanged|Narrowed|Broadened|N/A",
+      "confidence": "Unchanged|Tempered|Amplified|N/A",
+      "matching_confidence": 0.95,
+      "rationale": "<one sentence explaining the annotation>"
     }
   ],
   "pair_summary": {
-    "n_strengthened": 0,
-    "n_weakened": 0,
     "n_unchanged": 0,
-    "n_added": 0,
+    "n_clarified": 0,
+    "n_revised": 0,
     "n_removed": 0,
-    "dominant_change": "strengthened|weakened|unchanged|mixed"
+    "n_added": 0,
+    "n_scope_narrowed": 0,
+    "n_scope_broadened": 0,
+    "n_confidence_tempered": 0,
+    "n_confidence_amplified": 0,
+    "dominant_semantic": "Unchanged|Clarified|Revised|Removed|Added|Mixed"
   }
 }
 
 Rules:
-- Every preprint claim must appear exactly once (as strengthened, weakened, unchanged, or removed).
-- Every publication claim must appear exactly once (as strengthened, weakened, unchanged, or added).
-- Be precise: only classify as "strengthened" or "weakened" if there is a clear difference in certainty language.
-- dominant_change should be "mixed" if no single change type accounts for more than 50% of comparisons.
-- Return only valid JSON, no other text."""
+- Every preprint claim must appear exactly once across all alignments.
+- Every publication claim must appear exactly once across all alignments.
+- dominant_semantic is the most frequent semantic label; use "Mixed" if no single label exceeds 50%.
+- Return only valid JSON, no other text.
+"""
+
 
 def build_user_message(preprint_claims: list, pub_claims: list) -> str:
-    def fmt_claim(i, c):
+    def fmt(i, c):
         if isinstance(c, dict):
-            return f"{i+1}. [{c.get('certainty','?')}] {c.get('claim','')}"
-        return f"{i+1}. {str(c)}"
-    pre_text = "\n".join(fmt_claim(i, c) for i, c in enumerate(preprint_claims))
-    pub_text = "\n".join(fmt_claim(i, c) for i, c in enumerate(pub_claims))
+            text = c.get("claim", str(c))
+        else:
+            text = str(c)
+        return f"{i + 1}. {text}"
+
+    pre_text = "\n".join(fmt(i, c) for i, c in enumerate(preprint_claims))
+    pub_text = "\n".join(fmt(i, c) for i, c in enumerate(pub_claims))
     return (
         f"PREPRINT CLAIMS:\n{pre_text}\n\n"
         f"PUBLICATION CLAIMS:\n{pub_text}\n\n"
-        "Compare these two sets of claims and classify each change."
+        "Align and annotate these claims."
     )
 
-# ── Load already-processed pair IDs ───────────────────────────────────────────
+
+# ── Resume support ─────────────────────────────────────────────────────────────
 
 def load_done_ids() -> set:
     done = set()
@@ -122,81 +157,83 @@ def load_done_ids() -> set:
                 line = line.strip()
                 if line:
                     try:
-                        obj = json.loads(line)
-                        done.add(obj.get("pair_id", ""))
+                        done.add(json.loads(line).get("pair_id", ""))
                     except json.JSONDecodeError:
                         pass
     return done
 
+
 # ── Single comparison call ─────────────────────────────────────────────────────
 
-async def compare_pair_claims(client: AsyncOpenAI, pair: dict) -> dict:
-    pair_id        = pair["pair_id"]
+async def compare_pair(client: AsyncOpenAI, pair: dict, sem: asyncio.Semaphore) -> dict:
+    pair_id         = pair["pair_id"]
     preprint_claims = pair.get("preprint_claims", [])
     pub_claims      = pair.get("publication_claims", [])
 
+    meta = {k: pair.get(k, "") for k in
+            ["source", "preprint_year", "pub_year", "venue_type",
+             "linkage_method", "preprint_doi", "pub_doi"]}
+
     if not preprint_claims or not pub_claims:
-        return {
-            "pair_id": pair_id,
-            "error": "missing claims",
-            **{k: pair.get(k, "") for k in
-               ["source", "preprint_year", "pub_year", "venue_type",
-                "linkage_method", "preprint_doi", "pub_doi"]}
-        }
+        return {"pair_id": pair_id, "error": "missing claims", **meta}
 
     user_msg = build_user_message(preprint_claims, pub_claims)
 
-    for attempt in range(MAX_RETRIES):
-        try:
-            response = await client.chat.completions.create(
-                model=MODEL,
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user",   "content": user_msg},
-                ],
-                response_format={"type": "json_object"},
-                temperature=0.0,
-                max_tokens=1200,
-            )
-            raw    = response.choices[0].message.content
-            parsed = json.loads(raw)
-            summary = parsed.get("pair_summary", {})
+    async with sem:
+        for attempt in range(MAX_RETRIES):
+            try:
+                response = await client.chat.completions.create(
+                    model=MODEL,
+                    messages=[
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "user",   "content": user_msg},
+                    ],
+                    response_format={"type": "json_object"},
+                    temperature=0.0,
+                    max_tokens=2000,
+                    extra_body={"thinking": {"type": "enabled", "budget_tokens": 512}},
+                )
+                raw    = response.choices[0].message.content
+                parsed = json.loads(raw)
+                summary = parsed.get("pair_summary", {})
 
-            return {
-                "pair_id":          pair_id,
-                "source":           pair.get("source", ""),
-                "preprint_year":    pair.get("preprint_year", ""),
-                "pub_year":         pair.get("pub_year", ""),
-                "venue_type":       pair.get("venue_type", ""),
-                "linkage_method":   pair.get("linkage_method", ""),
-                "preprint_doi":     pair.get("preprint_doi", ""),
-                "pub_doi":          pair.get("pub_doi", ""),
-                "comparisons":      parsed.get("comparisons", []),
-                "n_strengthened":   summary.get("n_strengthened", 0),
-                "n_weakened":       summary.get("n_weakened", 0),
-                "n_unchanged":      summary.get("n_unchanged", 0),
-                "n_added":          summary.get("n_added", 0),
-                "n_removed":        summary.get("n_removed", 0),
-                "dominant_change":  summary.get("dominant_change", ""),
-                "tokens_used":      response.usage.total_tokens if response.usage else None,
-            }
-        except Exception as e:
-            if attempt < MAX_RETRIES - 1:
-                await asyncio.sleep(RETRY_WAIT * (attempt + 1))
-            else:
-                return {"pair_id": pair_id, "error": str(e),
-                        **{k: pair.get(k, "") for k in
-                           ["source", "preprint_year", "pub_year", "venue_type",
-                            "linkage_method", "preprint_doi", "pub_doi"]}}
+                return {
+                    "pair_id":                   pair_id,
+                    **meta,
+                    "alignments":                parsed.get("alignments", []),
+                    "n_unchanged":               summary.get("n_unchanged", 0),
+                    "n_clarified":               summary.get("n_clarified", 0),
+                    "n_revised":                 summary.get("n_revised", 0),
+                    "n_removed":                 summary.get("n_removed", 0),
+                    "n_added":                   summary.get("n_added", 0),
+                    "n_scope_narrowed":          summary.get("n_scope_narrowed", 0),
+                    "n_scope_broadened":         summary.get("n_scope_broadened", 0),
+                    "n_confidence_tempered":     summary.get("n_confidence_tempered", 0),
+                    "n_confidence_amplified":    summary.get("n_confidence_amplified", 0),
+                    "dominant_semantic":         summary.get("dominant_semantic", ""),
+                    "tokens_used":               response.usage.total_tokens if response.usage else None,
+                }
+            except Exception as e:
+                if attempt < MAX_RETRIES - 1:
+                    await asyncio.sleep(RETRY_WAIT * (attempt + 1))
+                else:
+                    return {"pair_id": pair_id, "error": str(e), **meta}
+
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 
-async def main():
-    print("=== Step 9: Claim Comparison and Change Classification ===\n")
+async def main(pilot: bool = False):
+    print("=== Claim Comparison: Multi-Dimensional Annotation ===\n")
 
-    api_key = KEY_FILE.read_text().strip()
+    # Resolve API key
+    api_key = os.environ.get("OPENAI_API_KEY", "")
+    if not api_key and KEY_FILE.exists():
+        api_key = KEY_FILE.read_text().strip()
     if not api_key:
-        raise ValueError(f"OpenAI API key not found in {KEY_FILE}")
+        raise ValueError(
+            "No API key found. Set OPENAI_API_KEY environment variable "
+            f"or place your key in {KEY_FILE}"
+        )
 
     # Load extracted claims
     print("Loading extracted claims...")
@@ -209,30 +246,41 @@ async def main():
                     pairs.append(json.loads(line))
                 except json.JSONDecodeError:
                     pass
-    print(f"  Loaded {len(pairs):,} pairs\n")
+    print(f"  Loaded {len(pairs):,} pairs")
+
+    if pilot:
+        pairs = pairs[:50]
+        print(f"  PILOT MODE: processing first 50 pairs only\n")
+    else:
+        print()
 
     # Skip already-processed
-    done_ids  = load_done_ids()
+    done_ids = load_done_ids()
     if done_ids:
         print(f"  Already processed: {len(done_ids):,} — resuming...")
-    todo = [p for p in pairs if p.get("pair_id", "") not in done_ids
-            and not p.get("error")]
+    todo = [p for p in pairs if p.get("pair_id", "") not in done_ids and not p.get("error")]
     print(f"  To process: {len(todo):,}\n")
 
     if not todo:
-        print("All pairs already processed.")
+        print("Nothing to process.")
     else:
-        client  = AsyncOpenAI(api_key=api_key)
-        batches = [todo[i:i+BATCH_SIZE] for i in range(0, len(todo), BATCH_SIZE)]
+        client = AsyncOpenAI(api_key=api_key)
+        sem    = asyncio.Semaphore(CONCURRENCY)
 
         n_done  = 0
         n_error = 0
         start   = time.time()
 
+        OUT_DIR.mkdir(parents=True, exist_ok=True)
+        OUT_REPORT.parent.mkdir(parents=True, exist_ok=True)
+
         with open(OUT_CHANGES, "a", encoding="utf-8") as out_f:
             pbar = tqdm(total=len(todo), desc="  Comparing", unit="pair")
-            for batch in batches:
-                results = await asyncio.gather(*[compare_pair_claims(client, p) for p in batch])
+            # Process in chunks to keep memory manageable
+            chunk_size = 200
+            for i in range(0, len(todo), chunk_size):
+                chunk   = todo[i:i + chunk_size]
+                results = await asyncio.gather(*[compare_pair(client, p, sem) for p in chunk])
                 for rec in results:
                     out_f.write(json.dumps(rec) + "\n")
                     out_f.flush()
@@ -240,16 +288,16 @@ async def main():
                         n_error += 1
                     else:
                         n_done += 1
-                pbar.update(len(batch))
+                pbar.update(len(chunk))
             pbar.close()
 
         elapsed = time.time() - start
-        print(f"\n  Processed {n_done:,} pairs in {elapsed/60:.1f} minutes")
+        print(f"\n  Processed {n_done:,} pairs in {elapsed / 60:.1f} minutes")
         print(f"  Errors: {n_error:,}")
 
     # ── Build flat CSV ─────────────────────────────────────────────────────────
     print("\nBuilding flat CSV...")
-    flat_rows = []
+    flat_rows   = []
     all_records = []
     with open(OUT_CHANGES, "r", encoding="utf-8") as f:
         for line in f:
@@ -261,68 +309,83 @@ async def main():
                 if rec.get("error"):
                     continue
                 all_records.append(rec)
-                for comp in rec.get("comparisons", []):
+                for aln in rec.get("alignments", []):
                     flat_rows.append({
-                        "pair_id":          rec["pair_id"],
-                        "source":           rec.get("source", ""),
-                        "preprint_year":    rec.get("preprint_year", ""),
-                        "pub_year":         rec.get("pub_year", ""),
-                        "venue_type":       rec.get("venue_type", ""),
-                        "linkage_method":   rec.get("linkage_method", ""),
-                        "preprint_doi":     rec.get("preprint_doi", ""),
-                        "pub_doi":          rec.get("pub_doi", ""),
-                        "preprint_claim":   comp.get("preprint_claim", ""),
-                        "publication_claim":comp.get("publication_claim", ""),
-                        "change_type":      comp.get("change_type", ""),
-                        "reasoning":        comp.get("reasoning", ""),
+                        "pair_id":             rec["pair_id"],
+                        "source":              rec.get("source", ""),
+                        "preprint_year":       rec.get("preprint_year", ""),
+                        "pub_year":            rec.get("pub_year", ""),
+                        "venue_type":          rec.get("venue_type", ""),
+                        "preprint_doi":        rec.get("preprint_doi", ""),
+                        "pub_doi":             rec.get("pub_doi", ""),
+                        "preprint_claim":      aln.get("preprint_claim", ""),
+                        "publication_claim":   aln.get("publication_claim", ""),
+                        "semantic":            aln.get("semantic", ""),
+                        "scope":               aln.get("scope", ""),
+                        "confidence":          aln.get("confidence", ""),
+                        "matching_confidence": aln.get("matching_confidence", ""),
+                        "rationale":           aln.get("rationale", ""),
                     })
             except json.JSONDecodeError:
                 pass
 
     flat_df = pd.DataFrame(flat_rows)
     flat_df.to_csv(OUT_FLAT, index=False, encoding="utf-8")
-    print(f"  Saved {len(flat_df):,} claim comparisons → {OUT_FLAT.name}")
+    print(f"  Saved {len(flat_df):,} claim alignments → {OUT_FLAT.name}")
 
-    # ── Summary statistics ─────────────────────────────────────────────────────
-    change_counts = Counter(flat_df["change_type"].tolist())
-    total_claims  = len(flat_df)
+    # ── Summary report ─────────────────────────────────────────────────────────
+    total = len(flat_df)
+    sem_counts  = Counter(flat_df["semantic"].tolist())
+    sco_counts  = Counter(flat_df.loc[~flat_df["scope"].isin(["N/A", ""]), "scope"].tolist())
+    con_counts  = Counter(flat_df.loc[~flat_df["confidence"].isin(["N/A", ""]), "confidence"].tolist())
+    dom_counts  = Counter(rec.get("dominant_semantic", "") for rec in all_records)
 
-    dominant_counts = Counter(
-        rec.get("dominant_change", "") for rec in all_records if not rec.get("error")
-    )
+    mc_vals = pd.to_numeric(flat_df["matching_confidence"], errors="coerce").dropna()
 
     lines = [
-        "=== Step 9: Claim Comparison Report ===\n",
-        f"Total pairs compared         : {len(all_records):,}",
-        f"Total claim comparisons      : {total_claims:,}",
-        f"\nChange type breakdown (claim level):",
+        "=== Claim Comparison Report ===\n",
+        f"Total pairs processed        : {len(all_records):,}",
+        f"Total claim alignments       : {total:,}",
+        f"\nSemantic evolution (claim level):",
     ]
-    for ct, n in sorted(change_counts.items(), key=lambda x: -x[1]):
-        pct = n / total_claims * 100 if total_claims else 0
-        lines.append(f"  {ct:<15}: {n:>7,}  ({pct:.1f}%)")
+    for label, n in sorted(sem_counts.items(), key=lambda x: -x[1]):
+        lines.append(f"  {label:<12}: {n:>7,}  ({n/total*100:.1f}%)" if total else f"  {label}")
+
+    lines.append(f"\nScope evolution (aligned pairs only, excl. Removed/Added):")
+    sco_total = sum(sco_counts.values())
+    for label, n in sorted(sco_counts.items(), key=lambda x: -x[1]):
+        lines.append(f"  {label:<12}: {n:>7,}  ({n/sco_total*100:.1f}%)" if sco_total else f"  {label}")
+
+    lines.append(f"\nConfidence evolution (aligned pairs only, excl. Removed/Added):")
+    con_total = sum(con_counts.values())
+    for label, n in sorted(con_counts.items(), key=lambda x: -x[1]):
+        lines.append(f"  {label:<12}: {n:>7,}  ({n/con_total*100:.1f}%)" if con_total else f"  {label}")
 
     lines += [
-        f"\nDominant change type (pair level):",
+        f"\nDominant semantic (pair level):",
     ]
-    for ct, n in sorted(dominant_counts.items(), key=lambda x: -x[1]):
+    for label, n in sorted(dom_counts.items(), key=lambda x: -x[1]):
         pct = n / len(all_records) * 100 if all_records else 0
-        lines.append(f"  {ct:<15}: {n:>7,}  ({pct:.1f}%)")
+        lines.append(f"  {label:<12}: {n:>7,}  ({pct:.1f}%)")
 
-    lines += [
-        f"\nBreakdown by source (dominant change):",
-        pd.DataFrame(all_records)[["source", "dominant_change"]]
-          .value_counts().to_string(),
-        f"\nBreakdown by venue type (dominant change):",
-        pd.DataFrame(all_records)[["venue_type", "dominant_change"]]
-          .value_counts().to_string(),
-    ]
+    if len(mc_vals) > 0:
+        lines += [
+            f"\nMatching confidence distribution:",
+            f"  Mean   : {mc_vals.mean():.3f}",
+            f"  Median : {mc_vals.median():.3f}",
+            f"  < 0.70 : {(mc_vals < 0.70).sum():,}  ({(mc_vals < 0.70).mean()*100:.1f}%) ← review these",
+        ]
 
     report = "\n".join(lines)
     print("\n" + report)
     OUT_REPORT.write_text(report, encoding="utf-8")
     print(f"\n  Saved report → {OUT_REPORT.name}")
-    print("\nStep 9 complete.")
+    print("\nDone.")
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--pilot", action="store_true",
+                        help="Process only the first 50 pairs (for testing)")
+    args = parser.parse_args()
+    asyncio.run(main(pilot=args.pilot))
