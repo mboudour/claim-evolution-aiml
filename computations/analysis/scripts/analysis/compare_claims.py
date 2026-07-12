@@ -49,13 +49,14 @@ from tqdm import tqdm
 # ── Paths ──────────────────────────────────────────────────────────────────────
 
 def _find_project_root(start: Path) -> Path:
-    """Walk upward from start until we find the directory containing README.md."""
+    """Walk upward from start until we find the directory that contains
+    both README.md and a computations/ subdirectory — the project root."""
     for candidate in [start, *start.parents]:
-        if (candidate / "README.md").exists():
+        if (candidate / "README.md").exists() and (candidate / "computations").is_dir():
             return candidate
     raise FileNotFoundError(
-        f"Could not locate project root (no README.md found above {start}). "
-        "Make sure you are running this script from within the project directory."
+        f"Could not locate project root above {start}. "
+        "Expected a directory containing both README.md and computations/."
     )
 
 SCRIPT_DIR   = Path(__file__).parent
