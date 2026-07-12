@@ -58,9 +58,10 @@ OUT_REPORT   = PROJECT_ROOT / "computations" / "analysis" / "outputs" / "compari
 
 # ── Configuration ──────────────────────────────────────────────────────────────
 MODEL        = "gpt-4o"
-CONCURRENCY  = 20          # async semaphore limit
-MAX_RETRIES  = 3
-RETRY_WAIT   = 5           # seconds, multiplied by attempt number
+CONCURRENCY  = 10          # async semaphore limit
+MAX_RETRIES  = 8           # total attempts per pair
+RETRY_WAIT   = 5           # seconds for generic errors (multiplied by attempt)
+RETRY_429    = 62          # seconds to wait on rate-limit (one full TPM window)
 
 # ── System prompt ──────────────────────────────────────────────────────────────
 SYSTEM_PROMPT = """You are an expert annotator of scientific claims. You will be given two lists of claims: one from a preprint abstract and one from the corresponding published version of the same paper.
@@ -212,10 +213,13 @@ async def compare_pair(client: AsyncOpenAI, pair: dict, sem: asyncio.Semaphore) 
                     "tokens_used":               response.usage.total_tokens if response.usage else None,
                 }
             except Exception as e:
+                err_str = str(e)
+                is_429  = "429" in err_str or "rate_limit" in err_str.lower()
                 if attempt < MAX_RETRIES - 1:
-                    await asyncio.sleep(RETRY_WAIT * (attempt + 1))
+                    wait = RETRY_429 if is_429 else RETRY_WAIT * (attempt + 1)
+                    await asyncio.sleep(wait)
                 else:
-                    return {"pair_id": pair_id, "error": str(e), **meta}
+                    return {"pair_id": pair_id, "error": err_str, **meta}
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
