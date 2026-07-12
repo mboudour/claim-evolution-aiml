@@ -73,7 +73,7 @@ OUT_REPORT   = PROJECT_ROOT / "computations" / "analysis" / "outputs" / "subfiel
 
 # ── Configuration ──────────────────────────────────────────────────────────────
 MODEL        = "gpt-4o"
-CONCURRENCY  = 30
+CONCURRENCY  = 10
 
 SUBFIELDS = [
     "Machine Learning",
@@ -147,17 +147,25 @@ async def classify_paper(client: AsyncOpenAI, paper: dict, sem: asyncio.Semaphor
     user_content = f"Title: {title}\n\nAbstract: {abstract[:1500]}"
 
     async with sem:
+        for attempt in range(5):
+            try:
+                response = await client.chat.completions.create(
+                    model=MODEL,
+                    messages=[
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "user",   "content": user_content},
+                    ],
+                    response_format={"type": "json_object"},
+                    temperature=0.0,
+                    max_tokens=300,
+                )
+                break  # success
+            except Exception as e:
+                if "429" in str(e) and attempt < 4:
+                    await asyncio.sleep(2 ** attempt * 2)
+                    continue
+                return {"pair_id": pair_id, "error": str(e)}
         try:
-            response = await client.chat.completions.create(
-                model=MODEL,
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user",   "content": user_content},
-                ],
-                response_format={"type": "json_object"},
-                temperature=0.0,
-                max_tokens=300,
-            )
             raw = response.choices[0].message.content
             parsed = json.loads(raw)
 
@@ -183,6 +191,7 @@ async def classify_paper(client: AsyncOpenAI, paper: dict, sem: asyncio.Semaphor
 
         except Exception as e:
             return {"pair_id": pair_id, "error": str(e)}
+
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
