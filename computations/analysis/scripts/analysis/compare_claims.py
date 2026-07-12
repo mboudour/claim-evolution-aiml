@@ -220,7 +220,7 @@ async def compare_pair(client: AsyncOpenAI, pair: dict, sem: asyncio.Semaphore) 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 
-async def main(pilot: bool = False, force: bool = False):
+async def main(pilot: bool = False, force: bool = False, reset: bool = False):
     print("=== Claim Comparison: Multi-Dimensional Annotation ===\n")
 
     # Resolve API key
@@ -232,6 +232,16 @@ async def main(pilot: bool = False, force: bool = False):
             "No API key found. Set OPENAI_API_KEY environment variable "
             f"or place your key in {KEY_FILE}"
         )
+
+    # Archive old output if --reset requested
+    if reset:
+        if OUT_CHANGES.exists():
+            archive = OUT_CHANGES.with_suffix(".jsonl.bak")
+            OUT_CHANGES.rename(archive)
+            print(f"  Archived old output → {archive.name}")
+        if OUT_FLAT.exists():
+            OUT_FLAT.unlink()
+        print()
 
     # Load extracted claims
     print("Loading extracted claims...")
@@ -404,5 +414,7 @@ if __name__ == "__main__":
                         help="Process only the first 50 pairs (for testing)")
     parser.add_argument("--force", action="store_true",
                         help="Re-process pairs even if already in output (use with --pilot)")
+    parser.add_argument("--reset", action="store_true",
+                        help="Archive existing output and start the full run from scratch")
     args = parser.parse_args()
-    asyncio.run(main(pilot=args.pilot, force=args.force))
+    asyncio.run(main(pilot=args.pilot, force=args.force, reset=args.reset))
