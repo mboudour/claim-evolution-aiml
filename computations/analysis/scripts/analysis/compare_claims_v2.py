@@ -51,7 +51,7 @@ SCRIPT_DIR   = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parents[4]          # .../claim-evolution-aiml
 
 CLAIMS_FILE  = PROJECT_ROOT / "computations" / "data" / "data_sources" / "claims" / "claims_extracted.jsonl"
-KEY_FILE     = PROJECT_ROOT / "config" / "openai_key.txt"
+KEY_FILE     = PROJECT_ROOT / "computations" / "data" / "config" / "openai_key.txt"
 OUT_DIR      = PROJECT_ROOT / "computations" / "data" / "data_sources" / "claims"
 OUT_CHANGES  = OUT_DIR / "claim_changes_v2.jsonl"
 OUT_FLAT     = OUT_DIR / "claim_changes_v2_flat.csv"
