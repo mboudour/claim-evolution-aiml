@@ -296,6 +296,8 @@ async def main(pilot: bool = False, force: bool = False):
                     out_f.flush()
                     if rec.get("error"):
                         n_error += 1
+                        if n_error <= 3:
+                            print(f"  ERROR [{rec.get('pair_id','')}]: {rec['error']}")
                     else:
                         n_done += 1
                 pbar.update(len(chunk))
