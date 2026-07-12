@@ -47,20 +47,7 @@ from openai import AsyncOpenAI
 from tqdm import tqdm
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
-
-def _find_project_root(start: Path) -> Path:
-    """Walk upward from start until we find the directory that contains
-    both README.md and a computations/ subdirectory — the project root."""
-    for candidate in [start, *start.parents]:
-        if (candidate / "README.md").exists() and (candidate / "computations").is_dir():
-            return candidate
-    raise FileNotFoundError(
-        f"Could not locate project root above {start}. "
-        "Expected a directory containing both README.md and computations/."
-    )
-
-SCRIPT_DIR   = Path(__file__).parent
-PROJECT_ROOT = _find_project_root(SCRIPT_DIR)
+PROJECT_ROOT = Path("/Users/moses/WorkPlaces/Sharebox3/WorkingProjects/The Evolution of Scientific Claims from Preprint to Publication in AI and Machine Learning")
 
 CLAIMS_FILE  = PROJECT_ROOT / "computations" / "data" / "data_sources" / "claims" / "claims_extracted.jsonl"
 KEY_FILE     = PROJECT_ROOT / "computations" / "data" / "config" / "openai_key.txt"
