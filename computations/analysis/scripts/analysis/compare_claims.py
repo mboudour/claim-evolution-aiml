@@ -47,8 +47,19 @@ from openai import AsyncOpenAI
 from tqdm import tqdm
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
-SCRIPT_DIR   = Path(__file__).resolve().parent
-PROJECT_ROOT = SCRIPT_DIR.parents[4]          # .../claim-evolution-aiml
+
+def _find_project_root(start: Path) -> Path:
+    """Walk upward from start until we find the directory containing README.md."""
+    for candidate in [start, *start.parents]:
+        if (candidate / "README.md").exists():
+            return candidate
+    raise FileNotFoundError(
+        f"Could not locate project root (no README.md found above {start}). "
+        "Make sure you are running this script from within the project directory."
+    )
+
+SCRIPT_DIR   = Path(__file__).parent
+PROJECT_ROOT = _find_project_root(SCRIPT_DIR)
 
 CLAIMS_FILE  = PROJECT_ROOT / "computations" / "data" / "data_sources" / "claims" / "claims_extracted.jsonl"
 KEY_FILE     = PROJECT_ROOT / "computations" / "data" / "config" / "openai_key.txt"
