@@ -1,52 +1,16 @@
 # The Evolution of Scientific Claims from Preprint to Publication in AI and Machine Learning, 2015–2024
 
-**Moses Boudourides**  
-School of Professional Studies, Northwestern University  
-[Moses.Boudourides@northwestern.edu](mailto:Moses.Boudourides@northwestern.edu)
+**Moses Boudourides**
 
 ---
 
 ## Overview
 
-This repository contains the computational pipeline, analysis scripts, and outputs for the paper:
+This repository contains the computational pipeline and analysis scripts for the paper:
 
 > *The Evolution of Scientific Claims from Preprint to Publication in AI and Machine Learning, 2015–2024*
 
 The study provides the first large-scale quantitative characterisation of scientific claim evolution in AI and machine learning, analysing 51,921 matched preprint–publication pairs drawn from arXiv, bioRxiv, and medRxiv (2015–2024). For each pair, claims are extracted from both the preprint and the published abstract, semantically aligned, and annotated along three independent dimensions: semantic evolution, scope evolution, and confidence evolution.
-
----
-
-## Repository Structure
-
-```
-claim-evolution-aiml/
-│
-├── computations/
-│   ├── data/
-│   │   ├── data_collection/        # Corpus assembly pipeline outputs
-│   │   │   ├── raw/                # Raw source downloads (arXiv, bioRxiv, medRxiv, SSRN)
-│   │   │   ├── deduplicated/       # Deduplicated preprint records
-│   │   │   ├── linked_pairs/       # DOI-matched preprint–publication pairs
-│   │   │   └── validated/          # Validated and enriched pairs
-│   │   └── data_sources/           # Analysis-ready datasets (no raw data uploaded)
-│   │       ├── processed/          # analysis_corpus.csv (not uploaded — see Data Access)
-│   │       └── claims/             # claim_changes_v2.jsonl, claims_extracted.jsonl
-│   │
-│   └── analysis/
-│       ├── scripts/
-│       │   ├── collection/         # Data collection and matching scripts
-│       │   └── analysis/           # Claim extraction, comparison, modelling, figures
-│       └── outputs/
-│           ├── figures/            # Individual panel PNGs
-│           └── *.csv               # Descriptive statistics, regression results
-│
-└── manuscript/
-    ├── plans/                      # Project execution plans and notes
-    ├── references/                 # Key reference papers
-    └── tex/                        # LaTeX source and compiled PDF
-```
-
-**Note:** Raw and processed data files are not included in this repository due to size and licensing constraints. See *Data Access* below.
 
 ---
 
@@ -97,15 +61,7 @@ pip install pandas numpy scipy matplotlib openai tqdm
 
 ## Data Access
 
-The analysis corpus (`analysis_corpus.csv`, 51,921 pairs) and claim annotation files are not included in this repository. They can be reconstructed by running the collection and extraction scripts in `computations/analysis/scripts/collection/` and `computations/analysis/scripts/analysis/` in order, using your own OpenAI API key.
-
----
-
-## Citation
-
-If you use this code or data, please cite:
-
-> Boudourides, M. (2025). *The Evolution of Scientific Claims from Preprint to Publication in AI and Machine Learning, 2015–2024*. Manuscript in preparation.
+The analysis corpus (51,921 pairs) and claim annotation files are not included in this repository. Publication metadata was collected via the [Dimensions](https://www.dimensions.ai) database. Preprint records were obtained from arXiv, bioRxiv, and medRxiv. The corpus can be reconstructed by running the collection and extraction scripts in `computations/analysis/scripts/collection/` and `computations/analysis/scripts/analysis/` in order, using your own API credentials.
 
 ---
 
