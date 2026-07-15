@@ -84,3 +84,5 @@ computations/analysis/outputs/figures/*.eps
 
 # ── Keep directory placeholders ───────────────────────────────────────────────
 !**/.gitkeep
+
+# Allow annotation batch files
