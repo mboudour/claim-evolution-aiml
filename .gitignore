@@ -86,3 +86,5 @@ computations/analysis/outputs/figures/*.eps
 !**/.gitkeep
 
 # Allow annotation batch files
+
+# Allow batch annotation files
