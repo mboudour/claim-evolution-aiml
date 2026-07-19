@@ -1,0 +1,32 @@
+{
+  "creators": [
+    {
+      "name": "Boudourides, Moses",
+      "affiliation": "Northwestern University",
+      "orcid": "0000-0002-6157-5647"
+    }
+  ],
+  "title": "The Evolution of Scientific Claims from Preprint to Publication in AI and ML, 2015\u20132024 \u2014 Claim Annotation Dataset",
+  "description": "LLM-derived claim alignment annotations for 41,859 preprint\u2013publication pairs in AI and Machine Learning (2015\u20132024). Contains 100 batch files (batch_001_of_100.jsonl through batch_100_of_100.jsonl) with semantic, scope, and confidence evolution labels for 168,764 claim alignments. Each record includes the preprint and publication claim texts, alignment labels (Unchanged, Clarified, Revised, Removed, Added), scope labels (Unchanged, Narrowed, Broadened), confidence labels (Unchanged, Tempered, Amplified), a matching confidence score, and a rationale. Pairs are identified by arXiv ID.",
+  "upload_type": "dataset",
+  "license": "cc-by-4.0",
+  "keywords": [
+    "claim evolution",
+    "scientific claims",
+    "preprint",
+    "publication",
+    "AI",
+    "machine learning",
+    "NLP",
+    "annotation",
+    "claim alignment",
+    "open science"
+  ],
+  "related_identifiers": [
+    {
+      "identifier": "https://github.com/mboudour/claim-evolution-aiml",
+      "relation": "isSupplementTo",
+      "scheme": "url"
+    }
+  ]
+}

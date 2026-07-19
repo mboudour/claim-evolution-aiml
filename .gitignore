@@ -88,3 +88,6 @@ computations/analysis/outputs/figures/*.eps
 # Allow annotation batch files
 
 # Allow batch annotation files
+
+# Allow Zenodo metadata file
+!.zenodo.json
